@@ -1,0 +1,62 @@
+name: Test and publish
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node --test test/*.test.mjs
+      - run: node --check server/index.mjs && node --check public/app.js
+      - name: Build and smoke-test the container
+        run: |
+          docker build -t filmderr:smoke .
+          docker run -d --name filmderr-smoke -p 127.0.0.1:3678:3678 filmderr:smoke
+          curl --fail --retry 10 --retry-delay 1 --retry-connrefused http://127.0.0.1:3678/healthz
+          curl --fail http://127.0.0.1:3678/ > /tmp/filmderr.html
+          grep -q Filmderr /tmp/filmderr.html
+      - name: Stop smoke container
+        if: always()
+        run: docker rm -f filmderr-smoke || true
+  image:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/fa9us/filmderr
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=sha
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

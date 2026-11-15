@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0c0d11">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="description" content="Your next movie is a swipe away. Discover films and send the ones you love to your own library.">
+  <title>Filmderr — Find your next film</title>
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="ambient" aria-hidden="true"></div>
+  <main id="auth-screen" class="auth-screen" hidden></main>
+  <div id="app" class="app" hidden>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Filmderr home"><span class="brand-mark" aria-hidden="true">f<span>•</span></span>filmderr<span class="brand-dot">.</span></a>
+      <div class="header-actions"><span id="demo-badge" class="badge demo-badge" hidden>DEMO</span><button id="account-button" class="avatar-button" aria-label="Your account">U</button></div>
+    </header>
+    <section class="discovery" aria-labelledby="discovery-heading">
+      <div class="discovery-heading"><div><p class="eyebrow">A LITTLE DISCOVERY. A GREAT NIGHT.</p><h1 id="discovery-heading">Find your next film<span>.</span></h1></div><button id="filter-button" class="icon-button" aria-label="Movie preferences"></button></div>
+      <div class="deck-meta"><span id="deck-context">Your personal screening room</span><button id="refresh-button" class="text-button" aria-label="Refresh movie deck">Refresh</button></div>
+      <p id="deck-warning" class="inline-warning" role="status" hidden></p>
+      <div id="card-stage" class="card-stage" aria-busy="true">
+        <div class="back-card" aria-hidden="true"></div>
+        <article id="movie-card" class="movie-card" tabindex="0" aria-label="Movie poster. Swipe left to add, right to pass. Hold for trailer." hidden>
+          <img id="movie-poster" class="movie-poster" alt="" draggable="false">
+          <div id="poster-fallback" class="poster-fallback" hidden><span class="brand-mark">f<span>•</span></span><p>Something worth discovering.</p></div>
+          <div class="poster-shade" aria-hidden="true"></div>
+          <div class="card-topline"><span id="movie-genre" class="glass-pill"></span><button id="trailer-button" class="trailer-button" aria-label="Watch trailer"><span aria-hidden="true">▶</span> Trailer</button></div>
+          <div id="like-stamp" class="swipe-stamp like-stamp" aria-hidden="true">ADD TO LIBRARY</div>
+          <div id="dislike-stamp" class="swipe-stamp dislike-stamp" aria-hidden="true">PASS</div>
+          <button id="movie-details" class="movie-details" aria-label="Read movie details"><div id="movie-facts" class="movie-facts"></div><h2 id="movie-title"></h2><p id="movie-overview"></p><span class="details-link">The story <span aria-hidden="true">↗</span></span></button>
+          <span class="hold-hint" aria-hidden="true">Hold the poster for a trailer</span>
+        </article>
+        <div id="deck-state" class="deck-state" role="status"><span class="spinner"></span><h2>Setting the scene</h2><p>Finding films for your next movie night.</p></div>
+      </div>
+      <div class="decision-controls">
+        <div class="decision-control"><button id="like-button" class="decision-button like-button" aria-label="Like movie and add to Radarr" disabled></button><span><span aria-hidden="true">←</span> ADD</span></div>
+        <button id="genre-button" class="genre-button" aria-label="Choose genres"><span id="genre-label">All genres</span><span aria-hidden="true">⌄</span></button>
+        <div class="decision-control"><button id="dislike-button" class="decision-button dislike-button" aria-label="Pass on this movie" disabled></button><span>PASS <span aria-hidden="true">→</span></span></div>
+      </div>
+      <div class="deck-bottom"><span id="deck-count">Shuffled just for you</span><button id="skip-button" class="text-button" disabled>Not now <span aria-hidden="true">↗</span></button></div>
+    </section>
+    <nav class="bottom-nav" aria-label="Main navigation"><button id="discover-tab" class="nav-item active" aria-current="page"></button><button id="activity-tab" class="nav-item"></button><button id="settings-tab" class="nav-item"></button></nav>
+  </div>
+  <dialog id="sheet" class="sheet" aria-labelledby="sheet-title"><div class="sheet-handle" aria-hidden="true"></div><div class="sheet-header"><div><p id="sheet-eyebrow" class="eyebrow">FILMDERR</p><h2 id="sheet-title"></h2></div><button id="sheet-close" class="icon-button" aria-label="Close dialog">×</button></div><div id="sheet-body" class="sheet-body"></div></dialog>
+  <dialog id="trailer-dialog" class="trailer-dialog" aria-labelledby="trailer-title"><header><h2 id="trailer-title">Trailer</h2><button id="trailer-close" class="icon-button" aria-label="Close trailer">×</button></header><div id="trailer-content"></div></dialog>
+  <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+data/
+.env
+.env.*
+!.env.example
+node_modules/
+coverage/
+*.log
+*.sqlite*
+encryption.key
+.preview/
+*.zip
+docs/CONTRACT.md

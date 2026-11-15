@@ -1,0 +1,21 @@
+services:
+  filmderr:
+    image: ghcr.io/fa9us/filmderr:latest
+    # To build from source instead: docker compose up -d --build
+    build: .
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:3678:3678"
+    environment:
+      FILMDERR_SETUP_TOKEN: ${FILMDERR_SETUP_TOKEN:?Set a random setup token of at least 24 characters in .env}
+      FILMDERR_PUBLIC_URL: ${FILMDERR_PUBLIC_URL:-http://localhost:3678}
+      FILMDERR_SECURE_COOKIES: ${FILMDERR_SECURE_COOKIES:-false}
+    volumes:
+      - filmderr_data:/app/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+volumes:
+  filmderr_data:

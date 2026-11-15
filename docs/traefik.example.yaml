@@ -1,0 +1,31 @@
+# Example only. Merge the service into your stack after adapting the values.
+# Set FILMDERR_PUBLIC_URL=https://films.example.com and secure cookies in .env.
+services:
+  filmderr:
+    image: ghcr.io/fa9us/filmderr:latest
+    restart: unless-stopped
+    init: true
+    environment:
+      FILMDERR_SETUP_TOKEN: ${FILMDERR_SETUP_TOKEN:?Set a random setup token}
+      FILMDERR_PUBLIC_URL: https://films.example.com
+      FILMDERR_SECURE_COOKIES: 'true'
+    volumes:
+      - filmderr_data:/app/data
+    networks:
+      - proxy
+    labels:
+      traefik.enable: 'true'
+      traefik.http.routers.filmderr.rule: Host(`films.example.com`)
+      traefik.http.routers.filmderr.entrypoints: websecure
+      traefik.http.routers.filmderr.tls: 'true'
+      traefik.http.routers.filmderr.tls.certresolver: letsencrypt
+      traefik.http.services.filmderr.loadbalancer.server.port: '3678'
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+volumes:
+  filmderr_data:
+networks:
+  proxy:
+    external: true
