@@ -21,12 +21,14 @@ jobs:
         run: |
           docker build -t filmderr:smoke .
           docker run -d --name filmderr-smoke -p 127.0.0.1:3678:3678 filmderr:smoke
-          curl --fail --retry 10 --retry-delay 1 --retry-connrefused http://127.0.0.1:3678/healthz
+          curl --fail --retry 10 --retry-delay 1 --retry-all-errors --connect-timeout 2 --max-time 5 http://127.0.0.1:3678/healthz
           curl --fail http://127.0.0.1:3678/ > /tmp/filmderr.html
           grep -q Filmderr /tmp/filmderr.html
       - name: Stop smoke container
         if: always()
-        run: docker rm -f filmderr-smoke || true
+        run: |
+          docker logs filmderr-smoke || true
+          docker rm -f filmderr-smoke || true
   image:
     needs: test
     if: github.event_name != 'pull_request'
@@ -60,3 +62,4 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
