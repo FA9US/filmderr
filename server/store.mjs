@@ -1,75 +1,65 @@
 import { DatabaseSync } from 'node:sqlite';
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { RecordCipher, StorageError, validKey } from './store-crypto.mjs';
 
-/** A small encrypted JSON store. Back up both the database and encryption.key. */
+/** SQLite is for local disks only. Select MariaDB when persistent data belongs on NAS. */
 export class Store {
   #db;
-  #key;
-
+  #cipher;
+  #closed = false;
   constructor(directory) {
     const dir = resolve(directory);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const keyPath = join(dir, 'encryption.key');
     const dbPath = join(dir, 'filmderr.sqlite');
-    if (!existsSync(keyPath)) {
-      if (existsSync(dbPath) && statSync(dbPath).size > 0) {
-        throw new Error('Encryption key is missing. Restore the original key with the database.');
-      }
-      try {
-        writeFileSync(keyPath, randomBytes(32), { flag: 'wx', mode: 0o600 });
-      } catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-      }
-    }
-    this.#key = readFileSync(keyPath);
-    if (this.#key.length !== 32) throw new Error('Encryption key is invalid. Restore the original key.');
-    chmodSync(keyPath, 0o600);
-    this.#db = new DatabaseSync(dbPath);
-    chmodSync(dbPath, 0o600);
-    this.#db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY NOT NULL, value BLOB NOT NULL) STRICT;');
-  }
-
-  get(key, fallback = null) {
-    const row = this.#db.prepare('SELECT value FROM kv WHERE key = ?').get(key);
-    if (!row) return fallback;
+    this.#cipher = new RecordCipher(dir, existsSync(dbPath) && statSync(dbPath).size > 0);
     try {
-      const bytes = Buffer.from(row.value);
-      if (bytes.length < 29 || bytes[0] !== 1) throw new Error();
-      const decipher = createDecipheriv('aes-256-gcm', this.#key, bytes.subarray(1, 13));
-      decipher.setAAD(Buffer.from(key));
-      decipher.setAuthTag(bytes.subarray(13, 29));
-      return JSON.parse(Buffer.concat([decipher.update(bytes.subarray(29)), decipher.final()]).toString('utf8'));
-    } catch {
-      throw new Error('Stored data could not be decrypted. Restore a matching database and key backup.');
+      this.#db = new DatabaseSync(dbPath);
+      chmodSync(dbPath, 0o600);
+      this.#db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY NOT NULL, value BLOB NOT NULL) STRICT;');
+      for (const row of this.#db.prepare('SELECT key, value FROM kv').all()) this.#cipher.decrypt(row.key, row.value);
+    } catch (error) {
+      this.#db?.close(); this.#cipher.close();
+      if (error instanceof StorageError) throw error;
+      throw new StorageError('Filmderr could not open its local SQLite database. Check the data directory.');
     }
   }
-
-  set(key, value) {
-    if (typeof key !== 'string' || !key || key.length > 512) throw new TypeError('Invalid store key.');
-    const json = JSON.stringify(value);
-    if (json === undefined) throw new TypeError('Store value must be JSON.');
-    const iv = randomBytes(12);
-    const cipher = createCipheriv('aes-256-gcm', this.#key, iv);
-    cipher.setAAD(Buffer.from(key));
-    const ciphertext = Buffer.concat([cipher.update(json, 'utf8'), cipher.final()]);
-    const encrypted = Buffer.concat([Buffer.from([1]), iv, cipher.getAuthTag(), ciphertext]);
+  async get(key, fallback = null) {
+    validKey(key);
+    const row = this.#db.prepare('SELECT value FROM kv WHERE key = ?').get(key);
+    return row ? this.#cipher.decrypt(key, row.value) : fallback;
+  }
+  async set(key, value) {
+    const encrypted = this.#cipher.encrypt(key, value);
     this.#db.prepare('INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, encrypted);
     return value;
   }
-
-  delete(key) {
+  async delete(key) {
+    validKey(key);
     return this.#db.prepare('DELETE FROM kv WHERE key = ?').run(key).changes > 0;
   }
-
-  keys(prefix = '') {
-    // A literal prefix, including '%' and '_', must not become a SQL pattern.
+  async keys(prefix = '') {
+    validKey(prefix, true);
     return this.#db.prepare('SELECT key FROM kv WHERE substr(key, 1, ?) = ? ORDER BY key').all(prefix.length, prefix).map(row => row.key);
   }
-
-  close() {
-    this.#db.close();
-    this.#key.fill(0);
+  async health() {
+    try { this.#db.prepare('SELECT 1').get(); return true; }
+    catch { throw new StorageError(); }
   }
+  async ping() { return this.health(); }
+  async close() {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.#db.close(); this.#cipher.close();
+  }
+}
+
+export async function openStore(directory, env = process.env, options = {}) {
+  const type = (env.FILMDERR_DB_TYPE || 'sqlite').toLowerCase();
+  if (type === 'sqlite') return new Store(directory);
+  if (type === 'mariadb') {
+    const { MariaDbStore } = await import('./store-mariadb.mjs');
+    return MariaDbStore.open(directory, env, options);
+  }
+  throw new StorageError('FILMDERR_DB_TYPE must be sqlite or mariadb.');
 }

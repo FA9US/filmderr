@@ -78,36 +78,71 @@ export class Filmderr {
   constructor(store, { integrationFactory = settings => new Integrations(settings), now = Date.now, graceMs = 5000 } = {}) {
     this.store = store; this.factory = integrationFactory; this.now = now; this.graceMs = graceMs;
     this.lock = Promise.resolve(); this.pools = new Map(); this.adapter = null;
-    if (!store.get('settings')) store.set('settings', structuredClone(DEFAULT_SETTINGS));
-    // A crash after an external request is uncertain. Never automatically repeat it.
-    for (const decision of this.allDecisions()) if (decision.status === 'processing') {
-      decision.status = 'failed'; decision.message = 'Interrupted during submission. Check your request history or Radarr before trying again.'; store.set(`decision:${decision.id}`, decision);
+    this.adapterKey = null; this.settingsRevision = 0; this.initializing = null;
+  }
+  async init() {
+    this.initializing ??= this.serialized(async () => {
+      if (!await this.store.get('settings')) await this.store.set('settings', structuredClone(DEFAULT_SETTINGS));
+      // Recovery is durable before the HTTP server/worker starts. Never replay uncertain external effects.
+      for (const decision of await this.allDecisions()) if (['processing', 'undoing'].includes(decision.status)) {
+        decision.message = decision.status === 'undoing'
+          ? 'Interrupted during exclusion undo. Review the exclusion in Radarr; no automatic removal will be retried.'
+          : 'Interrupted during submission. Check your request history or Radarr before trying again.';
+        decision.status = 'failed';
+        await this.store.set(`decision:${decision.id}`, decision);
+      }
+      return this;
+    });
+    return this.initializing;
+  }
+  async settings() { return await this.store.get('settings'); }
+  async connectionIdentity(settings) {
+    const { url, apiKey } = (settings || await this.settings()).radarr;
+    return createHash('sha256').update(JSON.stringify([url, apiKey])).digest('hex');
+  }
+  async saveSettings(patch) {
+    return this.serialized(async () => {
+      const changesIntegrations = ['radarr', 'plex', 'tmdb', 'seerr', 'sharedExclusions', 'clearSecrets'].some(key => key in patch);
+      if (changesIntegrations && (await this.allDecisions()).some(d => ['pending', 'processing', 'undoing'].includes(d.status))) throw fail('Finish or undo pending swipes before changing integrations.', 409);
+      const next = mergeSettings(await this.settings(), patch);
+      await this.store.set('settings', next);
+      this.settingsRevision++; this.adapter = null; this.adapterKey = null; this.pools.clear();
+      return redactSettings(next);
+    });
+  }
+  async integration(settings) {
+    const current = settings || await this.settings();
+    const key = JSON.stringify(current);
+    if (!this.adapter || this.adapterKey !== key) {
+      this.adapter = this.factory(current); this.adapterKey = key;
     }
+    return this.adapter;
   }
-  settings() { return this.store.get('settings'); }
-  connectionIdentity() { const { url, apiKey } = this.settings().radarr; return createHash('sha256').update(JSON.stringify([url,apiKey])).digest('hex'); }
-  saveSettings(patch) {
-    if (['radarr','plex','tmdb','seerr','sharedExclusions'].some(key => key in patch) && this.allDecisions().some(d => ['pending','processing'].includes(d.status))) throw fail('Finish or undo pending swipes before changing integrations.', 409);
-    const next = mergeSettings(this.settings(), patch); this.store.set('settings', next);
-    this.adapter = null; this.pools.clear(); return redactSettings(next);
+  async prefs(userId) { return preferences(await this.store.get(`prefs:${userId}`, {})); }
+  async savePrefs(userId, value) {
+    const p = preferences(value);
+    return this.serialized(async () => { await this.store.set(`prefs:${userId}`, p); return p; });
   }
-  integration() { return this.adapter ??= this.factory(this.settings()); }
-  prefs(userId) { return preferences(this.store.get(`prefs:${userId}`, {})); }
-  savePrefs(userId, value) { const p = preferences(value); this.store.set(`prefs:${userId}`, p); return p; }
-  allDecisions() { return this.store.keys('decision:').map(key => this.store.get(key)).filter(Boolean); }
-  history(userId) { return this.allDecisions().filter(d => d.userId === userId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(this.publicDecision); }
+  async allDecisions() {
+    const keys = await this.store.keys('decision:');
+    return (await Promise.all(keys.map(key => this.store.get(key)))).filter(Boolean);
+  }
+  async history(userId) { return (await this.allDecisions()).filter(d => d.userId === userId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(this.publicDecision); }
   publicDecision(decision) { const { userId, movie, externalId, connectionIdentity, ...safe } = decision; return safe; }
   serialized(fn) { const operation = this.lock.then(fn); this.lock = operation.catch(() => {}); return operation; }
   async deck(userId) {
-    const p = this.prefs(userId), key = JSON.stringify(p);
+    const revision = this.settingsRevision;
+    const p = await this.prefs(userId), settings = await this.settings(), api = await this.integration(settings), key = JSON.stringify(p);
     let cached = this.pools.get(key);
     if (!cached || this.now() - cached.at > 15 * 60 * 1000) {
-      const candidates = await this.integration().discover(p);
+      const candidates = await api.discover(p);
+      if (revision !== this.settingsRevision) throw fail('Connection settings changed. Refresh the deck.', 409);
       cached = { at: this.now(), movies: shuffle(candidates), warning: candidates.warning }; this.pools.set(key, cached);
       if (this.pools.size > 50) this.pools.delete(this.pools.keys().next().value);
     }
-    const library = await this.integration().library();
-    const hidden = new Set(this.allDecisions().filter(d => !['undone', 'failed'].includes(d.status) && (d.userId === userId || d.action === 'like' || (d.action === 'dislike' && d.shared))).map(d => d.tmdbId));
+    const library = await api.library();
+    const hidden = new Set((await this.allDecisions()).filter(d => !['undone', 'failed'].includes(d.status) && (d.userId === userId || d.action === 'like' || (d.action === 'dislike' && d.shared))).map(d => d.tmdbId));
+    if (revision !== this.settingsRevision) throw fail('Connection settings changed. Refresh the deck.', 409);
     const movies = cached.movies.filter(m => !library.radarrIds.has(m.id) && !library.plexIds.has(m.id) && !library.excludedIds.has(m.id) && !hidden.has(m.id));
     return { movies: movies.slice(0, 30), remaining: movies.length, syncedAt: new Date(this.now()).toISOString(), ...(cached.warning ? { warning: cached.warning } : {}) };
   }
@@ -115,72 +150,93 @@ export class Filmderr {
     const id = Number(tmdbId);
     if (!Number.isSafeInteger(id) || id < 1 || !['like', 'dislike', 'skip'].includes(action)) throw fail('Choose a valid movie and action.');
     return this.serialized(async () => {
-      const previous = this.allDecisions().find(d => d.userId === userId && d.tmdbId === id && !['undone', 'failed'].includes(d.status));
+      const decisions = await this.allDecisions();
+      const previous = decisions.find(d => d.userId === userId && d.tmdbId === id && !['undone', 'failed'].includes(d.status));
       if (previous) return { decision: this.publicDecision(previous) };
-      const movie = await this.integration().movie(id);
+      const settings = await this.settings(), api = await this.integration(settings);
+      const movie = await api.movie(id);
       if (action !== 'skip') {
-        const library = await this.integration().library();
+        const library = await api.library();
         if (library.radarrIds.has(id) || library.plexIds.has(id)) throw fail('This movie is already in your library or Radarr. Refresh the deck.', 409);
         if (action === 'like' && library.excludedIds.has(id)) throw fail('This movie is excluded in Radarr. Review its exclusion before requesting it.', 409);
-        const blocking = this.allDecisions().find(d => d.tmdbId === id && d.userId !== userId && ['pending', 'processing'].includes(d.status) && (d.action === 'like' || (d.action === 'dislike' && d.shared)));
+        const blocking = decisions.find(d => d.tmdbId === id && d.userId !== userId && ['pending', 'processing', 'undoing'].includes(d.status) && (d.action === 'like' || (d.action === 'dislike' && d.shared)));
         if (blocking) throw fail('Another household member is deciding on this movie. Refresh in a moment.', 409);
       }
       const decision = { id: randomUUID(), userId, tmdbId: id, title: movie.title, movie, action,
-        shared: action === 'dislike' && this.settings().sharedExclusions, connectionIdentity: this.connectionIdentity(),
+        shared: action === 'dislike' && settings.sharedExclusions, connectionIdentity: await this.connectionIdentity(settings),
         status: action === 'skip' ? 'skipped' : 'pending', createdAt: new Date(this.now()).toISOString(),
         ...(action === 'skip' ? {} : { executeAt: new Date(this.now() + this.graceMs).toISOString() }) };
-      this.store.set(`decision:${decision.id}`, decision);
+      await this.store.set(`decision:${decision.id}`, decision);
       return { decision: this.publicDecision(decision) };
     });
   }
   async processDue() {
     return this.serialized(async () => {
-      for (const d of this.allDecisions().filter(d => d.status === 'pending' && Date.parse(d.executeAt) <= this.now()).sort((a,b) => a.executeAt.localeCompare(b.executeAt))) {
-        d.status = 'processing'; this.store.set(`decision:${d.id}`, d);
+      const settings = await this.settings(), api = await this.integration(settings), connection = await this.connectionIdentity(settings);
+      for (const d of (await this.allDecisions()).filter(d => d.status === 'pending' && Date.parse(d.executeAt) <= this.now()).sort((a,b) => a.executeAt.localeCompare(b.executeAt))) {
+        // This commit MUST finish before any external side effect. A failed/uncertain commit stops the worker.
+        d.status = 'processing'; await this.store.set(`decision:${d.id}`, d);
         try {
-          const api = this.integration(), library = await api.library();
+          if (d.connectionIdentity !== connection) throw fail('This pending decision belongs to a different Radarr connection. No change was made.', 409);
+          const library = await api.library();
           if (library.radarrIds.has(d.tmdbId) || library.plexIds.has(d.tmdbId)) {
             d.status = 'already-present'; d.message = 'Already in Radarr or Plex; no change made.';
           } else if (d.action === 'like') {
             if (library.excludedIds.has(d.tmdbId)) throw fail('A household exclusion now exists. Nothing was requested.', 409);
             const result = await api.addMovie(d.movie);
-            d.status = this.settings().seerr.enabled ? 'requested' : 'added';
+            d.status = settings.seerr.enabled ? 'requested' : 'added';
             d.message = result.message; d.externalId = result.externalId;
           } else if (d.shared) {
             const result = await api.exclude(d.movie);
-            if (result.created) this.store.set(`exclusion:${d.connectionIdentity}:${d.tmdbId}`, { externalId: result.id, owned: true });
+            if (result.created) await this.store.set(`exclusion:${d.connectionIdentity}:${d.tmdbId}`, { externalId: result.id, owned: true });
             d.externalId = result.id; d.status = 'excluded'; d.message = 'Excluded from automatic Radarr list imports.';
           } else { d.status = 'hidden'; d.message = 'Hidden from your Filmderr deck.'; }
         } catch (error) {
           d.status = 'failed'; d.message = error.status ? error.message : 'Submission could not be verified. Check the service before retrying.';
         }
-        d.completedAt = new Date(this.now()).toISOString(); this.store.set(`decision:${d.id}`, d);
+        d.completedAt = new Date(this.now()).toISOString(); await this.store.set(`decision:${d.id}`, d);
       }
     });
   }
   async undo(userId, id) {
     return this.serialized(async () => {
-      const d = this.store.get(`decision:${id}`);
+      const d = await this.store.get(`decision:${id}`);
       if (!d || d.userId !== userId) throw fail('Decision not found.', 404);
       if (d.status === 'undone') return { decision: this.publicDecision(d) };
-      if (['added', 'requested', 'processing', 'already-present'].includes(d.status)) throw fail('This request has already been submitted. Review it in Radarr or Seerr; Filmderr will not delete media.', 409);
+      if (['added', 'requested', 'processing', 'undoing', 'already-present'].includes(d.status)) throw fail('This request has already been submitted. Review it in Radarr or Seerr; Filmderr will not delete media.', 409);
       if (d.status === 'excluded') {
-        if (d.connectionIdentity !== this.connectionIdentity()) throw fail('This dislike belongs to a different Radarr connection. Restore that connection before undoing it.', 409);
+        const settings = await this.settings(), api = await this.integration(settings);
+        if (d.connectionIdentity !== await this.connectionIdentity(settings)) throw fail('This dislike belongs to a different Radarr connection. Restore that connection before undoing it.', 409);
         const ownershipKey = `exclusion:${d.connectionIdentity}:${d.tmdbId}`;
-        const owned = this.store.get(ownershipKey);
-        const other = this.allDecisions().some(item => item.id !== d.id && item.tmdbId === d.tmdbId && item.connectionIdentity === d.connectionIdentity && item.action === 'dislike' && item.shared && ['pending', 'processing', 'excluded'].includes(item.status));
+        const owned = await this.store.get(ownershipKey);
+        const other = (await this.allDecisions()).some(item => item.id !== d.id && item.tmdbId === d.tmdbId && item.connectionIdentity === d.connectionIdentity && item.action === 'dislike' && item.shared && ['pending', 'processing', 'undoing', 'excluded'].includes(item.status));
         if (owned?.owned && !other) {
-          const current = await this.integration().findExclusion(d.tmdbId);
-          if (current && String(current.id) === String(owned.externalId)) await this.integration().removeExclusion(current.id, d.tmdbId);
-          this.store.delete(ownershipKey);
+          const current = await api.findExclusion(d.tmdbId);
+          if (current && String(current.id) === String(owned.externalId)) {
+            // Retire ownership durably BEFORE delete. An outage after delete must never leave
+            // authority to delete a later exclusion that happens to reuse the numeric ID.
+            d.status = 'undoing'; await this.store.set(`decision:${id}`, d);
+            await this.store.set(ownershipKey, { ...owned, owned: false, releasing: true });
+            try { await api.removeExclusion(current.id, d.tmdbId); }
+            catch {
+              d.status = 'failed'; d.message = 'Exclusion removal could not be verified. Review it in Radarr before retrying.';
+              await this.store.set(`decision:${id}`, d);
+              throw fail(d.message, 502);
+            }
+          }
+          await this.store.delete(ownershipKey);
         }
         d.message = other ? 'Your dislike was undone; another household exclusion remains.' : owned?.owned ? 'Filmderr exclusion removed.' : 'Your dislike was undone. The pre-existing Radarr exclusion was preserved.';
       }
-      d.status = 'undone'; this.store.set(`decision:${id}`, d); return { decision: this.publicDecision(d) };
+      d.status = 'undone'; await this.store.set(`decision:${id}`, d); return { decision: this.publicDecision(d) };
     });
   }
-  resetSkips(userId) {
-    for (const d of this.allDecisions().filter(d => d.userId === userId && d.status === 'skipped')) { d.status = 'undone'; this.store.set(`decision:${d.id}`, d); }
-    return { ok: true };
+  async resetSkips(userId) {
+    return this.serialized(async () => {
+      for (const d of (await this.allDecisions()).filter(d => d.userId === userId && d.status === 'skipped')) {
+        d.status = 'undone'; await this.store.set(`decision:${d.id}`, d);
+      }
+      return { ok: true };
+    });
   }
 }

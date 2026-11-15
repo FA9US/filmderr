@@ -3,7 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24.0.0" },
-  "scripts": { "start": "node server/index.mjs", "test": "node --test test/*.test.mjs", "check": "node --check server/index.mjs && node --check public/app.js" },
-  "license": "MIT"
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "start": "node server/index.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check server/index.mjs && node --check public/app.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "mariadb": "3.5.5"
+  }
 }

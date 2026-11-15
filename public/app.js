@@ -220,7 +220,7 @@ async function refreshDecisionToast(id) {
   if (state.toastDecisionId !== id) return;
   try { const history = await api('/api/history'); const d = (history.decisions || []).find(row => row.id === id); if (!d) return;
     if (state.toastDecisionId !== id) return;
-    if (['pending', 'processing', 'executing'].includes(d.status)) { setTimeout(() => refreshDecisionToast(id), 2500); return; }
+    if (['pending', 'processing', 'undoing', 'executing'].includes(d.status)) { setTimeout(() => refreshDecisionToast(id), 2500); return; }
     if (['cancelled', 'undone'].includes(d.status)) return;
     toast(d.message || `${d.title}: ${d.status}`, { error: d.status === 'failed', undo: d.action === 'dislike' && d.status !== 'failed' ? d.id : null });
   } catch { /* The Activity view can always refresh the persisted result. */ }
@@ -307,13 +307,13 @@ async function renderHistory() {
     const toolbar = el('div', 'history-toolbar'); toolbar.append(el('span', 'help', 'Only your activity is shown.'), button('Refresh', 'text-button', renderHistory)); body.append(toolbar);
     const rows = result.decisions || []; const list = el('div', 'history-list');
     rows.forEach(d => { const item = el('article', 'history-item'); const mark = el('span', `history-symbol ${d.action}`); mark.append(icon(d.action === 'like' ? 'heart' : d.action === 'dislike' ? 'close' : 'skip')); const info = el('div'); info.append(el('h3', '', d.title || `Movie ${d.tmdbId}`));
-      const labels = { pending: 'Pending · undo is available', processing: 'Applying your choice…', executing: 'Applying your choice…', completed: d.action === 'like' ? 'Submitted' : d.action === 'dislike' ? 'Excluded' : 'Skipped', added: 'Added to Radarr', requested: 'Requested in Seerr', excluded: 'Excluded', hidden: 'Hidden from your deck', 'already-present': 'Already in your library', skipped: 'Skipped for now', failed: 'Needs attention', cancelled: 'Cancelled', undone: 'Undone' };
+      const labels = { pending: 'Pending · undo is available', processing: 'Applying your choice…', undoing: 'Undoing…', executing: 'Applying your choice…', completed: d.action === 'like' ? 'Submitted' : d.action === 'dislike' ? 'Excluded' : 'Skipped', added: 'Added to Radarr', requested: 'Requested in Seerr', excluded: 'Excluded', hidden: 'Hidden from your deck', 'already-present': 'Already in your library', skipped: 'Skipped for now', failed: 'Needs attention', cancelled: 'Cancelled', undone: 'Undone' };
       info.append(el('p', d.status === 'failed' ? 'history-error' : 'history-status', labels[d.status] || d.status)); if (d.message) info.append(el('p', '', d.message)); info.append(el('p', '', formatDate(d.createdAt))); item.append(mark, info);
-      if (d.status === 'pending' || (d.action === 'dislike' && !['failed', 'cancelled', 'undone', 'processing', 'executing'].includes(d.status))) item.append(button('Undo', 'text-button', async event => { event.currentTarget.disabled = true; await undoDecision(d.id); })); list.append(item); });
+      if (d.status === 'pending' || (d.action === 'dislike' && !['failed', 'cancelled', 'undone', 'processing', 'undoing', 'executing'].includes(d.status))) item.append(button('Undo', 'text-button', async event => { event.currentTarget.disabled = true; await undoDecision(d.id); })); list.append(item); });
     body.append(rows.length ? list : el('p', 'empty-note', 'Your movie nights start here. Add a film or pass on one, and your choices will appear here.'));
     body.append(el('p', 'sync-note', 'Likes have a short undo window before submission. Once a request is submitted, undo will not delete media or cancel downloads. Shared exclusions are removed only when Filmderr owns them and no one else still dislikes that film.'));
     body.append(button('Show my skipped films again', 'button subtle', async event => { event.currentTarget.disabled = true; try { await api('/api/history/reset-skips', 'POST'); toast('Your skipped films can appear again.'); await loadDeck(); await renderHistory(); } catch (error) { toast(error.message, { error: true }); event.currentTarget.disabled = false; } }));
-    if (rows.some(d => ['pending', 'processing', 'executing'].includes(d.status))) state.historyTimer = setTimeout(() => { if (state.view === 'history' && $('#sheet').open) renderHistory(); }, 4000);
+    if (rows.some(d => ['pending', 'processing', 'undoing', 'executing'].includes(d.status))) state.historyTimer = setTimeout(() => { if (state.view === 'history' && $('#sheet').open) renderHistory(); }, 4000);
   } catch (error) { sheetError(body, error, renderHistory); }
 }
 

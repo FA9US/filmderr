@@ -22,6 +22,7 @@ async function serverFixture(t, demo = false) {
       ...process.env, HOST: '127.0.0.1', PORT: '0', FILMDERR_DATA_DIR: join(directory, 'data'),
       FILMDERR_SETUP_TOKEN: setupToken, FILMDERR_SETUP_TOKEN_FILE: '', FILMDERR_PUBLIC_URL: '',
       FILMDERR_SECURE_COOKIES: 'false', FILMDERR_DEMO: demo ? '1' : '',
+      FILMDERR_DB_TYPE: 'sqlite',
       TMPDIR: directory, TEMP: directory, TMP: directory,
     },
   });

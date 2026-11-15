@@ -1,0 +1,55 @@
+# docker compose -f compose.mariadb.yaml up -d
+# This connects to an EXISTING MariaDB container; it does not create one.
+services:
+  filmderr:
+    image: ghcr.io/fa9us/filmderr:latest
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:3678:3678"
+    environment:
+      FILMDERR_PUBLIC_URL: ${FILMDERR_PUBLIC_URL:-http://localhost:3678}
+      FILMDERR_SECURE_COOKIES: ${FILMDERR_SECURE_COOKIES:-false}
+      FILMDERR_SETUP_TOKEN_FILE: /run/secrets/filmderr-setup
+      FILMDERR_DB_TYPE: mariadb
+      FILMDERR_DB_HOST: ${FILMDERR_DB_HOST:?Set the existing MariaDB service hostname}
+      FILMDERR_DB_PORT: ${FILMDERR_DB_PORT:-3306}
+      FILMDERR_DB_NAME: ${FILMDERR_DB_NAME:-filmderr}
+      FILMDERR_DB_USER: ${FILMDERR_DB_USER:-filmderr}
+      FILMDERR_DB_PASSWORD_FILE: /run/secrets/filmderr-db-password
+    volumes:
+      - type: bind
+        source: ${FILMDERR_APPDATA_DIR:?Set a private appdata directory owned by UID 1000}
+        target: /app/data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${FILMDERR_SETUP_FILE:?Set a private setup-token file}
+        target: /run/secrets/filmderr-setup
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${FILMDERR_DB_PASSWORD_FILE:?Set a private database-password file}
+        target: /run/secrets/filmderr-db-password
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      - existing_database
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+networks:
+  existing_database:
+    external: true
+    name: ${FILMDERR_DB_NETWORK:?Set the existing Docker network shared with MariaDB}

@@ -44,7 +44,28 @@ In the setup screen, enter the setup token and the exact verified email of your 
 
 Use direct internal service URLs where possible, for example `http://radarr:7878` on a shared Docker network. A reverse-proxy login page is not an API endpoint. TLS certificates must validate; Filmderr does not disable certificate checks.
 
-Blank secret fields preserve saved credentials. Credentials and application state are encrypted in SQLite using a separate key in the persistent data volume. This protects accidental database-only disclosure, not a compromised host that can read both the database and its key.
+Blank secret fields preserve saved credentials. Credentials and application state are encrypted in SQLite or MariaDB using a separate key in the persistent data volume. This protects accidental database-only disclosure, not a compromised host that can read both the database and its key.
+
+## Use an existing MariaDB server
+
+Filmderr can share your existing MariaDB server while keeping its own dedicated database and restricted account. It does not need another database container. The [MariaDB Compose example](compose.mariadb.yaml) connects to an existing Docker network and uses private bind mounts for the encryption key and secret files. When adding Filmderr to an existing stack, merge the service into your central YAML and reuse its existing network definitions.
+
+Have the database administrator create an **empty, dedicated `filmderr` database** and a user granted only `SELECT, INSERT, UPDATE, DELETE, CREATE` on `filmderr.*`. Do not give Filmderr the root account or another application's database. The app creates its own encrypted `filmderr_kv` table; it refuses system schemas or databases containing unrelated tables. Configure:
+
+| Variable | Value |
+| --- | --- |
+| `FILMDERR_DB_TYPE` | `mariadb` (default is `sqlite`) |
+| `FILMDERR_DB_HOST` | Existing MariaDB service hostname on a shared network |
+| `FILMDERR_DB_PORT` | `3306`, unless your server uses another port |
+| `FILMDERR_DB_NAME` | Dedicated database name |
+| `FILMDERR_DB_USER` | Dedicated database user |
+| `FILMDERR_DB_PASSWORD_FILE` | Mounted private password file; alternatively use `FILMDERR_DB_PASSWORD` |
+
+MariaDB owns the database files through its existing data volume. Filmderr's `/app/data` bind contains only its encryption key in MariaDB mode; keep this directory private and writable by container UID 1000. A private NAS directory can hold the key. Confirm that the intended mount is actually present before starting; `create_host_path: false` alone cannot detect an unmounted NAS.
+
+Run **one Filmderr instance per database**. A connection-held database lock rejects a second instance. Database outages fail requests and health checks; Filmderr does not silently fall back to local storage or automatically reconnect a session that lost ownership. Restart Filmderr after the database is healthy. An existing SQLite installation is not automatically migrated when changing database type; keep its database and matching key together until an explicit migration is completed.
+
+Use a trusted private network for this connection. Filmderr does not publish MariaDB's port. Do not bind SQLite files to NFS/SMB: its default WAL mode requires local storage. Switching to MariaDB does not relocate the existing MariaDB volume; inspect that container's actual storage mount separately.
 
 ## Optional Seerr integration
 
@@ -72,15 +93,16 @@ For Traefik, join the existing proxy network and route the hostname to container
 
 ## Backup and updates
 
-Back up the **whole `filmderr_data` volume**, including `filmderr.sqlite`, its WAL files if present, and `encryption.key`. For a consistent simple backup, stop Filmderr during the copy. Losing the encryption key makes the stored configuration unrecoverable.
+For SQLite, back up the **whole `filmderr_data` volume**, including `filmderr.sqlite`, its WAL files if present, and `encryption.key`. For a consistent simple backup, stop Filmderr during the copy. For MariaDB, stop Filmderr and take a consistent dump of its dedicated database plus a copy of `/app/data/encryption.key`; restore both together. Do not copy MariaDB's live data directory as a database backup. Losing the encryption key makes the stored configuration unrecoverable. Keep the database password and setup token in your private secret-management/backup process.
 
 Before updating, keep a consistent data backup and record the previous image digest. Pull and recreate only Filmderr. Roll back to that digest and its matching data backup if required; never downgrade a database blindly. Published images target `linux/amd64` and `linux/arm64`.
 
 ## Development and isolated preview
 
-Requires Node.js 24 or newer; there are no runtime npm dependencies.
+Requires Node.js 24 or newer. The official MariaDB connector is pinned in the lockfile.
 
 ```sh
+npm ci --ignore-scripts
 node --test test/*.test.mjs
 FILMDERR_DEMO=1 node server/index.mjs
 ```
@@ -94,7 +116,7 @@ node server/index.mjs
 
 Demo mode binds to `127.0.0.1`, uses disposable sample data spanning multiple years, simulates decisions, and rejects integration/account changes. It never contacts your Radarr, Plex or Seerr. Poster images are fetched by the browser from TMDB. Restarting the demo resets it.
 
-Tests cover mocked service protocols, ownership-aware undo, duplicate/race handling, persistence, encryption and actual loopback HTTP authentication/CSRF boundaries. CI additionally builds and smoke-tests the container before publishing. These checks do not establish live Plex PIN authorization, physical iPhone Safari behavior, household reverse-proxy operation or a successful real movie download; test those on your own installation.
+Tests cover mocked service protocols, ownership-aware undo, duplicate/race handling, persistence, encryption and actual loopback HTTP authentication/CSRF boundaries. CI also runs MariaDB persistence checks against an isolated database, then builds and smoke-tests the container before publishing. Locally the real MariaDB tests require the `FILMDERR_TEST_DB_*` variables and a disposable dedicated database; never point them at production. These checks do not establish live Plex PIN authorization, physical iPhone Safari behavior, household reverse-proxy operation or a successful real movie download; test those on your own installation.
 
 ## Credits
 

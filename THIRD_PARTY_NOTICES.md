@@ -1,5 +1,15 @@
 # Third-party code and services
 
+## MariaDB Connector/Node.js
+
+The unmodified `mariadb` runtime dependency is MariaDB Connector/Node.js,
+licensed under LGPL-2.1-or-later. Its JavaScript source and license are included
+under `node_modules/mariadb` in the Docker image; the exact distribution and
+integrity hash are pinned in `package-lock.json`. Upstream source:
+[mariadb-corporation/mariadb-connector-nodejs](https://github.com/mariadb-corporation/mariadb-connector-nodejs).
+Other npm dependencies retain their own notices in their installed packages.
+Filmderr's MIT license applies to Filmderr's code, not these dependencies.
+
 ## Seerr
 
 Filmderr's `server/integrations.mjs` selectively adapts API routines from

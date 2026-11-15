@@ -10,12 +10,32 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:10.11
+        env:
+          MARIADB_RANDOM_ROOT_PASSWORD: '1'
+          MARIADB_DATABASE: filmderr_test
+          MARIADB_USER: filmderr
+          MARIADB_PASSWORD: isolated-ci-test-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - run: npm ci --ignore-scripts
       - run: node --test test/*.test.mjs
+        env:
+          FILMDERR_TEST_DB_HOST: 127.0.0.1
+          FILMDERR_TEST_DB_PORT: '3306'
+          FILMDERR_TEST_DB_NAME: filmderr_test
+          FILMDERR_TEST_DB_USER: filmderr
+          FILMDERR_TEST_DB_PASSWORD: isolated-ci-test-password
       - run: node --check server/index.mjs && node --check public/app.js
       - name: Build and smoke-test the container
         run: |
@@ -24,11 +44,30 @@ jobs:
           curl --fail --retry 10 --retry-delay 1 --retry-all-errors --connect-timeout 2 --max-time 5 http://127.0.0.1:3678/healthz
           curl --fail http://127.0.0.1:3678/ > /tmp/filmderr.html
           grep -q Filmderr /tmp/filmderr.html
+          docker stop filmderr-smoke
+      - name: Test container with MariaDB and a database outage
+        run: |
+          docker run -d --name filmderr-sql-smoke --network host \
+            -e HOST=127.0.0.1 -e FILMDERR_PUBLIC_URL=http://127.0.0.1:3678 \
+            -e FILMDERR_SETUP_TOKEN=isolated-container-test-setup-token \
+            -e FILMDERR_DB_TYPE=mariadb -e FILMDERR_DB_HOST=127.0.0.1 \
+            -e FILMDERR_DB_PORT=3306 -e FILMDERR_DB_NAME=filmderr_test \
+            -e FILMDERR_DB_USER=filmderr -e FILMDERR_DB_PASSWORD=isolated-ci-test-password \
+            filmderr:smoke
+          curl --fail --retry 10 --retry-delay 1 --retry-all-errors --connect-timeout 2 --max-time 5 http://127.0.0.1:3678/healthz
+          curl --fail -H 'Origin: http://127.0.0.1:3678' -H 'Content-Type: application/json' \
+            --data '{"token":"isolated-container-test-setup-token","email":"test@example.invalid","authMode":"local","password":"isolated-test-passphrase-123"}' \
+            http://127.0.0.1:3678/api/setup > /tmp/filmderr-setup.json
+          node -e "const s=require('/tmp/filmderr-setup.json');if(s.user?.role!=='admin'||!s.csrf)process.exit(1)"
+          docker stop ${{ job.services.mariadb.id }}
+          test "$(curl --silent --output /tmp/filmderr-health.json --write-out '%{http_code}' http://127.0.0.1:3678/healthz)" = 503
       - name: Stop smoke container
         if: always()
         run: |
           docker logs filmderr-smoke || true
           docker rm -f filmderr-smoke || true
+          docker logs filmderr-sql-smoke || true
+          docker rm -f filmderr-sql-smoke || true
   image:
     needs: test
     if: github.event_name != 'pull_request'

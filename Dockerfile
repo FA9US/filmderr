@@ -4,7 +4,8 @@ LABEL org.opencontainers.image.title="Filmderr" \
       org.opencontainers.image.source="https://github.com/FA9US/filmderr" \
       org.opencontainers.image.licenses="MIT"
 WORKDIR /app
-COPY --chown=node:node package.json LICENSE THIRD_PARTY_NOTICES.md ./
+COPY --chown=node:node package.json package-lock.json LICENSE THIRD_PARTY_NOTICES.md ./
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY --chown=node:node licenses ./licenses
 COPY --chown=node:node server ./server
 COPY --chown=node:node public ./public
