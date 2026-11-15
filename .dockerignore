@@ -1,9 +1,14 @@
-.git
-.env
-.env.*
-data
-node_modules
-coverage
-.preview
-*.log
-*.zip
+# Allow only the Dockerfile and its explicit COPY inputs into the build context.
+**
+!Dockerfile
+!.dockerignore
+!package.json
+!package-lock.json
+!LICENSE
+!THIRD_PARTY_NOTICES.md
+!licenses/
+!licenses/**
+!server/
+!server/**
+!public/
+!public/**

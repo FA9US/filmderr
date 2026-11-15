@@ -93,9 +93,13 @@ jobs:
             type=semver,pattern={{version}}
             type=sha
       - uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: 'false'
+          BUILDX_METADATA_PROVENANCE: disabled
         with:
           context: .
           push: true
+          provenance: false
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
